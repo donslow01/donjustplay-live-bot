@@ -12,8 +12,29 @@ FACEBOOK_PAGE_ACCESS_TOKEN = os.environ["FACEBOOK_PAGE_ACCESS_TOKEN"]
 STATE_FILE = Path("last_live.txt")
 
 
+def check_response(response, service_name):
+    """แสดงรายละเอียดข้อผิดพลาด โดยไม่เปิดเผย API key หรือ access token"""
+    if not response.ok:
+        print(f"{service_name} API Error: HTTP {response.status_code}")
+
+        try:
+            error_data = response.json()
+            print(
+                json.dumps(
+                    error_data,
+                    ensure_ascii=False,
+                    indent=2
+                )
+            )
+        except ValueError:
+            print(response.text[:2000])
+
+        response.raise_for_status()
+
+
 def find_live():
     url = "https://www.googleapis.com/youtube/v3/search"
+
     params = {
         "part": "snippet",
         "channelId": YOUTUBE_CHANNEL_ID,
@@ -24,10 +45,11 @@ def find_live():
     }
 
     response = requests.get(url, params=params, timeout=30)
-    response.raise_for_status()
-    data = response.json()
+    check_response(response, "YouTube")
 
+    data = response.json()
     items = data.get("items", [])
+
     if not items:
         print("ยังไม่พบไลฟ์สด")
         return None
@@ -36,11 +58,16 @@ def find_live():
     video_id = video["id"]["videoId"]
     title = video["snippet"]["title"]
 
-    return {
+    live = {
         "id": video_id,
         "title": title,
         "url": f"https://www.youtube.com/watch?v={video_id}",
     }
+
+    print("ตรวจพบไลฟ์ YouTube:", live["title"])
+    print("ลิงก์ไลฟ์:", live["url"])
+
+    return live
 
 
 def post_to_facebook(live):
@@ -64,12 +91,36 @@ def post_to_facebook(live):
         },
         timeout=30,
     )
-    response.raise_for_status()
-    print("โพสต์ Facebook สำเร็จ:", response.json())
+
+    # ถ้า Facebook ปฏิเสธโพสต์ จะแสดงสาเหตุจริงจาก API
+    check_response(response, "Facebook")
+
+    result = response.json()
+    print("โพสต์ Facebook สำเร็จ")
+    print("Post ID:", result.get("id"))
 
 
 def main():
+    # ตรวจสอบการตั้งค่าโดยไม่แสดงค่าความลับ
+    required_settings = {
+        "YOUTUBE_API_KEY": YOUTUBE_API_KEY,
+        "YOUTUBE_CHANNEL_ID": YOUTUBE_CHANNEL_ID,
+        "FACEBOOK_PAGE_ID": FACEBOOK_PAGE_ID,
+        "FACEBOOK_PAGE_ACCESS_TOKEN": FACEBOOK_PAGE_ACCESS_TOKEN,
+    }
+
+    missing = [
+        name for name, value in required_settings.items()
+        if not value.strip()
+    ]
+
+    if missing:
+        raise ValueError(
+            "GitHub Secrets มีค่าว่าง: " + ", ".join(missing)
+        )
+
     live = find_live()
+
     if live is None:
         return
 
@@ -83,6 +134,7 @@ def main():
         print("ไลฟ์นี้โพสต์ไปแล้ว ไม่โพสต์ซ้ำ")
         return
 
+    # บันทึก ID เฉพาะเมื่อโพสต์ Facebook สำเร็จ
     post_to_facebook(live)
     STATE_FILE.write_text(live["id"])
     print("บันทึกสถานะไลฟ์แล้ว")
